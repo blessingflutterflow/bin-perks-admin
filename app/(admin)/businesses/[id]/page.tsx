@@ -77,7 +77,7 @@ export default function BusinessDetailPage() {
         averageRating: reviewsSnap.size > 0 ? totalRating / reviewsSnap.size : 0,
       });
 
-      const paymentsList = paymentsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      const paymentsList: any[] = paymentsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       paymentsList.sort((a, b) => (b.createdAt?.toMillis() || 0) - (a.createdAt?.toMillis() || 0));
       setPayments(paymentsList);
 

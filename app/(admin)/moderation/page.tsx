@@ -197,7 +197,7 @@ function ReviewsTab() {
       id: d.id,
       businessName: bizNames[d.data().businessId] ?? d.data().businessId,
       ...d.data(),
-    }));
+    } as FlaggedReview));
     list.sort(
       (a, b) =>
         (b.flaggedAt?.toMillis?.() ?? 0) - (a.flaggedAt?.toMillis?.() ?? 0)
