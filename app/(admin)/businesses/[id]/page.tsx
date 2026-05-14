@@ -60,7 +60,7 @@ export default function BusinessDetailPage() {
       // 2. Fetch Metrics & Payments
       const [loyaltiesSnap, redemptionsSnap, reviewsSnap, paymentsSnap] = await Promise.all([
         getDocs(query(collection(db, 'loyalties'), where('businessId', '==', businessId))),
-        getDocs(query(collection(db, 'redemptions'), where('businessId', '==', businessId))),
+        getDocs(query(collection(db, 'redemptions'), where('vendorId', '==', businessId))),
         getDocs(query(collection(db, 'reviews'), where('businessId', '==', businessId))),
         getDocs(query(collection(db, 'payments'), where('businessId', '==', businessId))),
       ]);
