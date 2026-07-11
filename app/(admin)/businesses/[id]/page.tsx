@@ -1,10 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { db } from '@/lib/firebase';
+import { db, auth } from '@/lib/firebase';
 import { doc, getDoc, collection, query, where, getDocs, updateDoc } from 'firebase/firestore';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, Store, MapPin, Phone, Star, ShieldAlert, CheckCircle, Clock, Users, Gift, Ticket, MessageSquare } from 'lucide-react';
+import { ArrowLeft, Store, MapPin, Phone, Star, ShieldAlert, CheckCircle, Clock, Users, Gift, Ticket, MessageSquare, Megaphone, MegaphoneOff } from 'lucide-react';
 import Link from 'next/link';
 
 interface Business {
@@ -25,6 +25,8 @@ interface Business {
   planId?: string;
   isPaused?: boolean;
   businessHours?: any;
+  promotionsEnabled?: boolean;
+  promotionsDisabledReason?: string;
 }
 
 export default function BusinessDetailPage() {
@@ -123,6 +125,45 @@ export default function BusinessDetailPage() {
     }
   };
 
+  const handleTogglePromotions = async () => {
+    if (!business) return;
+    try {
+      const isEnabled = business.promotionsEnabled !== false; // default: enabled
+      let updates: any = {};
+
+      if (isEnabled) {
+        // Turning OFF — reason required
+        const reason = window.prompt('Enter a reason for disabling promotions for this vendor (the vendor will see this):');
+        if (reason === null) return;
+        if (reason.trim() === '') {
+          alert('A reason is required to disable promotions.');
+          return;
+        }
+        updates = {
+          promotionsEnabled: false,
+          promotionsDisabledReason: reason.trim(),
+          promotionsUpdatedAt: new Date(),
+          promotionsUpdatedBy: auth.currentUser?.uid || null,
+        };
+      } else {
+        // Turning ON
+        if (!confirm('Re-enable promotions for this vendor?')) return;
+        updates = {
+          promotionsEnabled: true,
+          promotionsDisabledReason: '',
+          promotionsUpdatedAt: new Date(),
+          promotionsUpdatedBy: auth.currentUser?.uid || null,
+        };
+      }
+
+      await updateDoc(doc(db, 'businesses', business.id), updates);
+      setBusiness({ ...business, ...updates });
+    } catch (error) {
+      console.error('Error toggling promotions:', error);
+      alert('Failed to update promotions setting');
+    }
+  };
+
   const handleAdd30Days = async () => {
     if (!business) return;
     if (!confirm('Are you sure you want to manually add 30 days of access?')) return;
@@ -199,6 +240,17 @@ export default function BusinessDetailPage() {
         </div>
         <div className="flex items-center gap-3">
           <button
+            onClick={handleTogglePromotions}
+            className={`flex items-center gap-2 px-4 py-2 font-medium rounded-lg transition-colors ${
+              business.promotionsEnabled === false
+                ? 'bg-green-600 text-white hover:bg-green-700'
+                : 'bg-rose-600 text-white hover:bg-rose-700'
+            }`}
+          >
+            {business.promotionsEnabled === false ? <Megaphone size={20} /> : <MegaphoneOff size={20} />}
+            {business.promotionsEnabled === false ? 'Enable Promotions' : 'Disable Promotions'}
+          </button>
+          <button
             onClick={handleToggleSuspend}
             className={`flex items-center gap-2 px-4 py-2 font-medium rounded-lg transition-colors ${
               business.status === 'suspended'
@@ -272,7 +324,27 @@ export default function BusinessDetailPage() {
                     <p className="text-orange-800 bg-orange-50 p-3 rounded-lg border border-orange-100">{business.suspensionReason}</p>
                   </div>
                 )}
-                
+
+                {/* Promotions Section */}
+                <div className="pt-4 border-t border-gray-100">
+                  <span className="block font-medium text-gray-900 mb-2">Promotions</span>
+                  <div className={`flex items-center gap-2 p-3 rounded-lg border ${
+                    business.promotionsEnabled === false
+                      ? 'bg-rose-50 border-rose-100 text-rose-700'
+                      : 'bg-green-50 border-green-100 text-green-700'
+                  }`}>
+                    {business.promotionsEnabled === false ? <MegaphoneOff size={16} /> : <Megaphone size={16} />}
+                    <span className="font-semibold text-sm">
+                      {business.promotionsEnabled === false ? 'Disabled by Admin' : 'Enabled'}
+                    </span>
+                  </div>
+                  {business.promotionsEnabled === false && business.promotionsDisabledReason && (
+                    <p className="mt-2 text-rose-800 bg-rose-50 p-3 rounded-lg border border-rose-100 text-sm">
+                      <span className="font-medium">Reason:</span> {business.promotionsDisabledReason}
+                    </p>
+                  )}
+                </div>
+
                 {/* Availability Section */}
                 <div className="pt-4 border-t border-gray-100">
                   <span className="block font-medium text-gray-900 mb-2">Discovery Status</span>
