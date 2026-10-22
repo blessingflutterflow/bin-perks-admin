@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, onSnapshot, DocumentData } from 'firebase/firestore';
 import { Store, Users, TrendingUp, PieChart as PieChartIcon } from 'lucide-react';
 import {
   LineChart,
@@ -29,6 +29,70 @@ interface Stats {
 
 const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
 
+type TimestampLike = { toDate?: () => Date; seconds?: number } | string | number | null | undefined;
+
+function toDate(ts: TimestampLike): Date | null {
+  if (!ts) return null;
+  if (typeof ts === 'object') {
+    if (ts.toDate) return ts.toDate();
+    if (ts.seconds !== undefined) return new Date(ts.seconds * 1000);
+    return null;
+  }
+  return new Date(ts);
+}
+
+function buildStats(
+  businesses: DocumentData[],
+  users: DocumentData[],
+  stampRecordsByVendor: { [vendorId: string]: number }
+): Stats {
+  // The business counter can miss stamps, and vendors can delete stamp
+  // records from their history, so take whichever is higher per business.
+  const totalStamps = businesses.reduce(
+    (acc, b) => acc + Math.max(b.totalStamps || 0, stampRecordsByVendor[b.id] || 0),
+    0
+  );
+
+  // Category distribution
+  const categoryCount: { [key: string]: number } = {};
+  businesses.forEach(b => {
+    const cat = b.category || 'Uncategorized';
+    categoryCount[cat] = (categoryCount[cat] || 0) + 1;
+  });
+  const categoryData = Object.entries(categoryCount)
+    .map(([name, value]) => ({ name, value }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 8);
+
+  // Monthly growth data (last 6 months, cumulative). Docs created before the
+  // window, or without a createdAt, count from the start so the final
+  // point matches the totals above.
+  const countCreatedBefore = (docs: DocumentData[], end: Date) =>
+    docs.filter(d => {
+      const created = toDate(d.createdAt);
+      return !created || created < end;
+    }).length;
+
+  const now = new Date();
+  const monthlyData = Array.from({ length: 6 }).map((_, i) => {
+    const start = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
+    const end = new Date(start.getFullYear(), start.getMonth() + 1, 1);
+    return {
+      month: start.toLocaleString('default', { month: 'short' }),
+      users: countCreatedBefore(users, end),
+      businesses: countCreatedBefore(businesses, end)
+    };
+  });
+
+  return {
+    totalBusinesses: businesses.length,
+    totalUsers: users.length,
+    totalStamps,
+    categoryData,
+    monthlyData
+  };
+}
+
 export default function DashboardPage() {
   const [stats, setStats] = useState<Stats>({
     totalBusinesses: 0,
@@ -40,85 +104,44 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchStats();
-  }, []);
+    // Live listeners so the cards and charts move as data changes
+    let businesses: DocumentData[] = [];
+    let users: DocumentData[] = [];
+    let stampRecordsByVendor: { [vendorId: string]: number } = {};
+    const loaded = new Set<string>();
 
-  const fetchStats = async () => {
-    try {
-      // Get businesses
-      const businessesSnap = await getDocs(collection(db, 'businesses'));
-      const businesses = businessesSnap.docs.map(doc => doc.data());
-      const totalStamps = businesses.reduce((acc, b) => acc + (b.totalStamps || 0), 0);
-
-      // Get users
-      const usersSnap = await getDocs(collection(db, 'users'));
-      const users = usersSnap.docs.map(doc => doc.data());
-
-      // Category distribution
-      const categoryCount: { [key: string]: number } = {};
-      businesses.forEach(b => {
-        const cat = b.category || 'Uncategorized';
-        categoryCount[cat] = (categoryCount[cat] || 0) + 1;
-      });
-      const categoryData = Object.entries(categoryCount)
-        .map(([name, value]) => ({ name, value }))
-        .sort((a, b) => b.value - a.value)
-        .slice(0, 8);
-
-      // Monthly growth data (last 6 months)
-      const now = new Date();
-      const last6Months = Array.from({ length: 6 }).map((_, i) => {
-        const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
-        return {
-          name: d.toLocaleString('default', { month: 'short' }),
-          month: d.getMonth(),
-          year: d.getFullYear(),
-          users: 0,
-          businesses: 0
-        };
-      });
-
-      users.forEach(u => {
-        if (!u.createdAt) return;
-        const d = u.createdAt.toDate ? u.createdAt.toDate() : new Date(u.createdAt.seconds * 1000);
-        const monthIdx = last6Months.findIndex(m => m.month === d.getMonth() && m.year === d.getFullYear());
-        if (monthIdx !== -1) {
-          for (let i = monthIdx; i < last6Months.length; i++) {
-            last6Months[i].users++;
-          }
-        }
-      });
-
-      businesses.forEach(b => {
-        if (!b.createdAt) return;
-        const d = b.createdAt.toDate ? b.createdAt.toDate() : new Date(b.createdAt.seconds * 1000);
-        const monthIdx = last6Months.findIndex(m => m.month === d.getMonth() && m.year === d.getFullYear());
-        if (monthIdx !== -1) {
-          for (let i = monthIdx; i < last6Months.length; i++) {
-            last6Months[i].businesses++;
-          }
-        }
-      });
-
-      const monthlyData = last6Months.map(m => ({
-        month: m.name,
-        users: m.users,
-        businesses: m.businesses
-      }));
-
-      setStats({
-        totalBusinesses: businesses.length,
-        totalUsers: users.length,
-        totalStamps,
-        categoryData,
-        monthlyData
-      });
-    } catch (error) {
-      console.error('Error fetching stats:', error);
-    } finally {
+    const update = (source: string) => {
+      loaded.add(source);
+      if (loaded.size < 3) return;
+      setStats(buildStats(businesses, users, stampRecordsByVendor));
       setLoading(false);
-    }
-  };
+    };
+    const onError = (source: string) => (error: Error) => {
+      console.error(`Error listening to ${source}:`, error);
+      update(source);
+    };
+
+    const unsubscribers = [
+      onSnapshot(collection(db, 'businesses'), snap => {
+        businesses = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        update('businesses');
+      }, onError('businesses')),
+      onSnapshot(collection(db, 'users'), snap => {
+        users = snap.docs.map(doc => doc.data());
+        update('users');
+      }, onError('users')),
+      onSnapshot(collection(db, 'stamps'), snap => {
+        stampRecordsByVendor = {};
+        snap.docs.forEach(doc => {
+          const vendorId = doc.data().vendorId;
+          if (vendorId) stampRecordsByVendor[vendorId] = (stampRecordsByVendor[vendorId] || 0) + 1;
+        });
+        update('stamps');
+      }, onError('stamps')),
+    ];
+
+    return () => unsubscribers.forEach(unsubscribe => unsubscribe());
+  }, []);
 
   const statCards = [
     { label: 'Total Businesses', value: stats.totalBusinesses, icon: Store, color: 'bg-blue-50 text-blue-600' },
