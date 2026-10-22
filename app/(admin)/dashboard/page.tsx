@@ -44,15 +44,8 @@ function toDate(ts: TimestampLike): Date | null {
 function buildStats(
   businesses: DocumentData[],
   users: DocumentData[],
-  stampRecordsByVendor: { [vendorId: string]: number }
+  totalStamps: number
 ): Stats {
-  // The business counter can miss stamps, and vendors can delete stamp
-  // records from their history, so take whichever is higher per business.
-  const totalStamps = businesses.reduce(
-    (acc, b) => acc + Math.max(b.totalStamps || 0, stampRecordsByVendor[b.id] || 0),
-    0
-  );
-
   // Category distribution
   const categoryCount: { [key: string]: number } = {};
   businesses.forEach(b => {
@@ -107,13 +100,13 @@ export default function DashboardPage() {
     // Live listeners so the cards and charts move as data changes
     let businesses: DocumentData[] = [];
     let users: DocumentData[] = [];
-    let stampRecordsByVendor: { [vendorId: string]: number } = {};
+    let totalStamps = 0;
     const loaded = new Set<string>();
 
     const update = (source: string) => {
       loaded.add(source);
       if (loaded.size < 3) return;
-      setStats(buildStats(businesses, users, stampRecordsByVendor));
+      setStats(buildStats(businesses, users, totalStamps));
       setLoading(false);
     };
     const onError = (source: string) => (error: Error) => {
@@ -130,12 +123,10 @@ export default function DashboardPage() {
         users = snap.docs.map(doc => doc.data());
         update('users');
       }, onError('users')),
+      // Count the stamp records themselves, not the per-business totalStamps
+      // counter, so deleted stamps drop off the total.
       onSnapshot(collection(db, 'stamps'), snap => {
-        stampRecordsByVendor = {};
-        snap.docs.forEach(doc => {
-          const vendorId = doc.data().vendorId;
-          if (vendorId) stampRecordsByVendor[vendorId] = (stampRecordsByVendor[vendorId] || 0) + 1;
-        });
+        totalStamps = snap.size;
         update('stamps');
       }, onError('stamps')),
     ];
